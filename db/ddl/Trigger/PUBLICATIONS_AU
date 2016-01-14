@@ -1,0 +1,100 @@
+CREATE OR REPLACE TRIGGER PUBLICATIONS_AU
+   AFTER UPDATE OF "IsAvailable"
+   ON ALAKSHM6.PUBLICATIONS
+   REFERENCING NEW AS new OLD AS old
+   FOR EACH ROW
+DECLARE
+   v_interval_hours            TIMESTAMP;
+   v_publication_id            INT;
+   v_publication_type          VARCHAR2 (30);
+   v_publication_identifier    VARCHAR2 (30);
+   v_title                     VARCHAR2 (200);
+   v_unityId                   VARCHAR2 (20);
+   v_patron_type               VARCHAR2 (30);
+   v_publication_is_reserved   CHAR;
+BEGIN
+   v_publication_id := :new."ID";
+   v_publication_type := :new."TYPE";
+   v_publication_identifier := :new."IDENTIFIER";
+
+   IF (:old."IsAvailable" = 'N' AND :new."IsAvailable" = 'Y')
+   THEN
+      -- Get unityid from waitlist table.Need to delete this combination from table later
+      SELECT t.unityid
+        INTO v_unityId
+        FROM (  SELECT l."Type" AS TYPE,
+                       p."Waitlist_No" AS waitlistno,
+                       p."UnityId" AS unityid
+                  FROM publication_waitlist p
+                       INNER JOIN librarypatron l ON l."UnityId" = p."UnityId"
+                 WHERE     p."Identifier" = v_publication_identifier
+                       AND p."Type" = v_publication_type
+              GROUP BY l."Type", p."Waitlist_No", p."UnityId"
+              ORDER BY l."Type", p."Waitlist_No" ASC) t
+       WHERE ROWNUM = 1;
+
+      IF v_unityId IS NULL
+      THEN
+         NULL;
+      ELSE
+         -- Get whether the patron in waitlist is student of faculty to determine
+         -- checkout period
+         SELECT l."Type"
+           INTO v_patron_type
+           FROM LIBRARYPATRON l
+          WHERE l."UnityId" = v_unityID;
+
+         -- Get whether publication is reserved or not
+         SELECT p."IsReserved"
+           INTO v_publication_is_reserved
+           FROM PUBLICATION_DETAILS p
+          WHERE     p."Identifier" = v_publication_identifier
+                AND p."Type" = v_publication_type;
+
+         IF v_publication_type = 'Books'
+         THEN
+            IF v_publication_is_reserved = 'Y'
+            THEN
+               v_interval_hours := SYSTIMESTAMP + INTERVAL '4' HOUR;
+            ELSE
+               IF v_patron_type = 'Faculty'
+               THEN
+                  v_interval_hours := SYSTIMESTAMP + INTERVAL '720' HOUR;
+               ELSIF v_patron_type = 'Student'
+               THEN
+                  v_interval_hours := SYSTIMESTAMP + INTERVAL '360' HOUR;
+               END IF;
+            END IF;
+         ELSIF    v_publication_type = 'Journals'
+               OR v_publication_type = 'Conferences'
+         THEN
+            v_interval_hours := SYSTIMESTAMP + INTERVAL '12' HOUR;
+         END IF;
+
+         INSERT INTO PUBLICATION_CHECKOUT
+              VALUES (v_unityId,
+                      v_publication_id,
+                      SYSTIMESTAMP,
+                      v_interval_hours,
+                      CAST ('31/DEC/9999' AS TIMESTAMP));
+
+         INSERT INTO NOTIFICATION
+                 VALUES (
+                           v_unityId,
+                           SYSTIMESTAMP,
+                              'Publication '
+                           || v_publication_id
+                           || ' has been checked out with due date '
+                           || v_interval_hours
+                           || ' . Please return within that time.');
+
+         --UPDATE PUBLICATIONS SET "IsAvailable"='N' where "ID"=v_publication_id;
+
+         DELETE FROM PUBLICATION_WAITLIST w
+               WHERE     w."Identifier" = v_publication_identifier
+                     AND w."Type" = v_publication_type
+                     AND w."UnityId" = v_unityId;
+      END IF;
+   END IF;
+END;
+/

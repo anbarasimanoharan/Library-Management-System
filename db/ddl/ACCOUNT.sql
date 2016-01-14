@@ -1,0 +1,16 @@
+CREATE TABLE ACCOUNT
+(
+   PATRON_ID   VARCHAR2 (20) NOT NULL,
+   BALANCE     FLOAT (53) DEFAULT 0.0,
+   
+)
+NOCACHE
+LOGGING;
+
+ALTER TABLE account
+   ADD CONSTRAINT sys_c00814945 PRIMARY KEY (patron_id) VALIDATE;
+   
+ALTER TABLE account
+   ADD CONSTRAINT fk_id_1 FOREIGN KEY (patron_id)
+       REFERENCES rnagill.librarypatron (unityid)
+       VALIDATE;
